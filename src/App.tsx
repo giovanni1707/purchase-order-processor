@@ -116,6 +116,11 @@ export default function App() {
     setPhase('running');
     setError('');
     try {
+      if (pdf.size > 3.3 * 1024 * 1024) {
+        throw new Error(
+          `The PDF file size (${(pdf.size / (1024 * 1024)).toFixed(1)} MB) exceeds the upload limit (~3.3 MB). Please compress or reduce the file size.`
+        );
+      }
       setProgress('Reading quotation…');
       const pdfBase64 = await readBase64(pdf);
       setProgress('Running verification passes…');
@@ -124,13 +129,25 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pdfBase64 }),
       });
+      const rawText = await resp.text();
       let data: any;
       try {
-        data = await resp.json();
+        data = JSON.parse(rawText);
       } catch {
-        throw new Error(resp.status === 413 ? 'The PDF is too large to send.' : `The server returned an unreadable answer (HTTP ${resp.status}).`);
+        const snippet = rawText.trim().slice(0, 250);
+        if (resp.status === 413) {
+          throw new Error('The PDF is too large to send to the server (HTTP 413).');
+        }
+        if (resp.status === 504) {
+          throw new Error('The extraction request timed out (HTTP 504). Please try again.');
+        }
+        throw new Error(
+          snippet
+            ? `Server returned HTTP ${resp.status}: ${snippet}`
+            : `The server returned an unreadable answer (HTTP ${resp.status}).`
+        );
       }
-      if (!resp.ok && !data?.error && !data?.uncertainties) throw new Error(`Extraction failed (HTTP ${resp.status}).`);
+      if (!resp.ok && !data?.error && !data?.uncertainties) throw new Error(data?.message || `Extraction failed (HTTP ${resp.status}).`);
       if (data.error) throw new Error(data.error);
       if (!data.success || !data.extraction) {
         setUncertainties(data.uncertainties?.length ? data.uncertainties : [data.message || 'The quotation could not be read reliably.']);
